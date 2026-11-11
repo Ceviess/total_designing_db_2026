@@ -1,3 +1,7 @@
+/*
+Таблицы
+*/
+
 set search_path to kuzmin_food, exts;
 
 create table if not exists address (
