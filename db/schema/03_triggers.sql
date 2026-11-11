@@ -96,3 +96,58 @@ create trigger trg_review_entity
     before insert or update on review
     for each row
     execute function check_review_entity();
+
+
+-- BR-9.6, BR-9.7: рейтинг блюда и ресторана — среднее по отзывам
+
+create or replace function recalc_rating(
+    p_entity_type review_entity_type,
+    p_entity_id uuid
+) returns void
+language plpgsql as $$
+begin
+    if p_entity_type = 'блюдо' then
+        update product
+        set rating = (
+            select avg(r.rating)
+            from review r
+            where r.entity_type = 'блюдо'
+              and r.entity_id = p_entity_id
+        )
+        where product_id = p_entity_id;
+    elsif p_entity_type = 'ресторан' then
+        update restaurant
+        set rating = (
+            select avg(r.rating)
+            from review r
+            where r.entity_type = 'ресторан'
+              and r.entity_id = p_entity_id
+        )
+        where restaurant_id = p_entity_id;
+    end if;
+end $$;
+
+create or replace function rating_change() returns trigger
+language plpgsql as $$
+begin
+    if tg_op = 'DELETE' then
+        perform recalc_rating(old.entity_type, old.entity_id);
+        return old;
+    end if;
+
+    if tg_op = 'UPDATE'
+       and (old.entity_type is distinct from new.entity_type
+            or old.entity_id is distinct from new.entity_id) then
+        perform recalc_rating(old.entity_type, old.entity_id);
+    end if;
+
+    perform recalc_rating(new.entity_type, new.entity_id);
+    return new;
+end $$;
+
+drop trigger if exists trg_rating_change on review;
+
+create trigger trg_rating_change
+    after insert or update or delete on review
+    for each row
+    execute function rating_change();
