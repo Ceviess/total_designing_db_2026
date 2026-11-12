@@ -322,4 +322,26 @@ begin
                 (1 + (v_j % 5))::numeric(2,1),
                 v_delivered_times[v_j] + make_interval(mins => 10));
     end loop;
+
+    -- Выплаты курьерам.
+
+    insert into courier_pay (year, month, courier_id, amount,
+                             coefficient_used)
+    select extract(year from months.month_start)::smallint,
+           extract(month from months.month_start)::smallint,
+           c.courier_id,
+           round(coalesce(sum(o.commission), 0) * c.coefficient, 2),
+           c.coefficient
+    from courier c
+    cross join (
+        select date_trunc('month', localtimestamp)
+               - make_interval(months => n) as month_start
+        from generate_series(0, 5) as n
+    ) as months
+    left join "order" o
+           on o.courier_id = c.courier_id
+          and o.status = 'доставлен'
+          and o.order_timestamp >= months.month_start
+          and o.order_timestamp < months.month_start + interval '1 month'
+    group by months.month_start, c.courier_id, c.coefficient;
 end $$;
