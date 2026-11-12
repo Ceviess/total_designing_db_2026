@@ -34,9 +34,36 @@ set search_path to kuzmin_food, exts
 as $$
 declare
     v_client_ids uuid[];
+    v_courier_ids uuid[];
     v_category_ids uuid[];
     v_restaurant_ids uuid[];
     v_client_address_ids uuid[];
+    v_all_product_ids uuid[];
+    v_all_prices numeric[];
+    v_delivered_order_ids uuid[];
+    v_delivered_client_ids uuid[];
+    v_delivered_restaurant_ids uuid[];
+    v_delivered_product_ids uuid[];
+    v_delivered_times timestamp[];
+    v_order_id uuid;
+    v_client_id uuid;
+    v_restaurant_id uuid;
+    v_courier_id uuid;
+    v_address_id uuid;
+    v_order_time timestamp;
+    v_delivery_time timestamp;
+    v_status order_status;
+    v_order_amount numeric(12,2);
+    v_commission numeric(12,2);
+    v_total numeric(12,2);
+    v_product_ids uuid[];
+    v_prices numeric[];
+    v_quantities numeric[];
+    v_product_count int;
+    v_client_index int;
+    v_restaurant_index int;
+    v_i int;
+    v_j int;
 begin
     if value is null or value <= 0 then
         raise exception 'insert_test_data: количество должно быть положительным, получено %',
@@ -79,6 +106,9 @@ begin
            end,
            0.1
     from generate_series(1, value) as i;
+
+    select array_agg(courier_id order by fio) into v_courier_ids
+    from courier;
 
     insert into product_category (product_category_id, product_category_name)
     select exts.uuid_generate_v4(), 'Категория ' || i
@@ -136,6 +166,12 @@ begin
     from unnest(v_restaurant_ids) with ordinality as r(restaurant_id, ord)
     cross join generate_series(1, 5) as n;
 
+    select array_agg(p.product_id order by r.restaurant_name, p.product_name),
+           array_agg(p.price order by r.restaurant_name, p.product_name)
+    into v_all_product_ids, v_all_prices
+    from product p
+    join restaurant r on r.restaurant_id = p.restaurant_id;
+
     select array_agg(client_id order by login) into v_client_ids
     from client;
 
@@ -148,4 +184,142 @@ begin
            v_client_address_ids[(ci - 1) * 4 + aj]
     from generate_series(1, value) as ci
     cross join generate_series(1, 4) as aj;
+
+    -- Заказы, позиции, оплаты и отзывы.
+
+    v_delivered_order_ids := array[]::uuid[];
+    v_delivered_client_ids := array[]::uuid[];
+    v_delivered_restaurant_ids := array[]::uuid[];
+    v_delivered_product_ids := array[]::uuid[];
+    v_delivered_times := array[]::timestamp[];
+
+    for v_i in 1..value * 5 loop
+        v_client_index := ((v_i - 1) % value) + 1;
+        v_client_id := v_client_ids[v_client_index];
+        v_address_id := v_client_address_ids[
+            (v_client_index - 1) * 4 + (1 + (v_i * 3) % 4)
+        ];
+        v_restaurant_index := ((v_i - 1) % value) + 1;
+        v_restaurant_id := v_restaurant_ids[v_restaurant_index];
+        v_courier_id := v_courier_ids[((v_i * 3) % value) + 1];
+
+        v_order_time := localtimestamp
+            - make_interval(days => (v_i * 13) % 150,
+                            hours => 1 + (v_i * 7) % 23);
+
+        if v_i % 5 = 0 then
+            v_status := case
+                when v_i % 20 = 0 then 'отменён'
+                when v_i % 10 = 0 then 'в_доставке'
+                else 'готовится'
+            end;
+        else
+            v_status := 'доставлен';
+        end if;
+
+        if v_status = 'доставлен' then
+            v_delivery_time := v_order_time
+                + make_interval(mins => 10 + (v_i * 5) % 40);
+        else
+            v_delivery_time := null;
+        end if;
+
+        v_product_count := 1 + (v_i % 5);
+        v_product_ids := v_all_product_ids[
+            (v_restaurant_index - 1) * 5 + 1
+            : (v_restaurant_index - 1) * 5 + v_product_count
+        ];
+        v_prices := v_all_prices[
+            (v_restaurant_index - 1) * 5 + 1
+            : (v_restaurant_index - 1) * 5 + v_product_count
+        ];
+
+        v_quantities := array[]::numeric[];
+        v_order_amount := 0;
+
+        for v_j in 1..v_product_count loop
+            v_quantities := v_quantities || (1 + ((v_i + v_j) % 3))::numeric;
+            v_order_amount := v_order_amount + v_prices[v_j] * v_quantities[v_j];
+        end loop;
+
+        if v_order_amount < 1000 then
+            v_quantities[1] := v_quantities[1]
+                + ceil((1000 - v_order_amount) / v_prices[1]);
+
+            v_order_amount := 0;
+
+            for v_j in 1..v_product_count loop
+                v_order_amount := v_order_amount
+                    + v_prices[v_j] * v_quantities[v_j];
+            end loop;
+        end if;
+
+        v_order_amount := round(v_order_amount, 2);
+        v_commission := round(v_order_amount * 0.10, 2);
+        v_total := v_order_amount + v_commission;
+        v_order_id := exts.uuid_generate_v4();
+
+        insert into "order" (order_id, client_id, restaurant_id, courier_id,
+                             address_id, order_timestamp, delivery_timestamp,
+                             order_amount, commission, total_amount,
+                             status, pay_status, description)
+        values (v_order_id, v_client_id, v_restaurant_id, v_courier_id,
+                v_address_id, v_order_time, v_delivery_time,
+                v_order_amount, v_commission, v_total,
+                v_status, 'оплачен', 'Заказ ' || v_i);
+
+        for v_j in 1..v_product_count loop
+            insert into order_structure (order_id, product_id, quantity)
+            values (v_order_id, v_product_ids[v_j], v_quantities[v_j]);
+        end loop;
+
+        insert into payment (payment_id, order_id, payment_type, amount,
+                             transaction_code, payment_timestamp, status)
+        values (exts.uuid_generate_v4(), v_order_id,
+                (enum_range(null::payment_type))[1 + (v_i % 3)],
+                v_total, 'tx-' || lpad(v_i::text, 10, '0'),
+                v_order_time + make_interval(mins => 5), 'успех');
+
+        if v_status = 'доставлен' then
+            v_delivered_order_ids := array_append(
+                v_delivered_order_ids, v_order_id
+            );
+            v_delivered_client_ids := array_append(
+                v_delivered_client_ids, v_client_id
+            );
+            v_delivered_restaurant_ids := array_append(
+                v_delivered_restaurant_ids, v_restaurant_id
+            );
+            v_delivered_product_ids := array_append(
+                v_delivered_product_ids, v_product_ids[1]
+            );
+            v_delivered_times := array_append(
+                v_delivered_times, v_delivery_time
+            );
+        end if;
+    end loop;
+
+    for v_j in 1..array_length(v_delivered_order_ids, 1) loop
+        insert into review (review_id, client_id, order_id, entity_type,
+                            entity_id, description, photo_url, rating,
+                            review_timestamp)
+        values (exts.uuid_generate_v4(), v_delivered_client_ids[v_j],
+                v_delivered_order_ids[v_j], 'ресторан',
+                v_delivered_restaurant_ids[v_j],
+                'Отзыв о ресторане ' || v_j, null,
+                (1 + (v_j % 5))::numeric(2,1),
+                v_delivered_times[v_j] + make_interval(mins => 10));
+    end loop;
+
+    for v_j in 1..value loop
+        insert into review (review_id, client_id, order_id, entity_type,
+                            entity_id, description, photo_url, rating,
+                            review_timestamp)
+        values (exts.uuid_generate_v4(), v_delivered_client_ids[v_j],
+                v_delivered_order_ids[v_j], 'блюдо',
+                v_delivered_product_ids[v_j],
+                'Отзыв о блюде ' || v_j, null,
+                (1 + (v_j % 5))::numeric(2,1),
+                v_delivered_times[v_j] + make_interval(mins => 10));
+    end loop;
 end $$;
