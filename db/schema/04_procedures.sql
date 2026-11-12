@@ -345,3 +345,54 @@ begin
           and o.order_timestamp < months.month_start + interval '1 month'
     group by months.month_start, c.courier_id, c.coefficient;
 end $$;
+
+
+-- Добавление блюда
+
+create or replace procedure add_product(
+    p_restaurant_id uuid,
+    p_product_category_id uuid,
+    p_name varchar(50),
+    p_price numeric(10,2),
+    p_status product_status,
+    p_description text,
+    p_rating numeric(3,2) default null,
+    p_photo_url text default null
+)
+language plpgsql
+set search_path to kuzmin_food, exts
+as $$
+begin
+    if not exists (select 1 from restaurant
+                   where restaurant_id = p_restaurant_id) then
+        raise exception 'add_product: ресторан с идентификатором % не найден',
+            p_restaurant_id
+            using errcode = 'no_data_found';
+    end if;
+
+    if not exists (select 1 from product_category
+                   where product_category_id = p_product_category_id) then
+        raise exception 'add_product: категория с идентификатором % не найдена',
+            p_product_category_id
+            using errcode = 'no_data_found';
+    end if;
+
+    if p_price < 0 then
+        raise exception 'add_product: цена блюда не может быть отрицательной: %',
+            p_price
+            using errcode = 'invalid_parameter_value';
+    end if;
+
+    if p_rating is not null and (p_rating < 0 or p_rating > 5) then
+        raise exception 'add_product: рейтинг блюда должен быть от 0 до 5: %',
+            p_rating
+            using errcode = 'invalid_parameter_value';
+    end if;
+
+    insert into product (product_id, product_name, product_category_id,
+                         price, restaurant_id, photo_url, rating,
+                         status, description)
+    values (exts.uuid_generate_v4(), p_name, p_product_category_id,
+            p_price, p_restaurant_id, p_photo_url, p_rating,
+            p_status, p_description);
+end $$;
