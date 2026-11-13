@@ -1,5 +1,5 @@
 /*
-Триггеры целостности
+Триггеры
 */
 
 set search_path to kuzmin_food, exts;
