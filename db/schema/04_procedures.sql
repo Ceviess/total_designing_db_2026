@@ -396,3 +396,74 @@ begin
             p_price, p_restaurant_id, p_photo_url, p_rating,
             p_status, p_description);
 end $$;
+
+
+-- Расчёт зарплаты курьеров
+
+create or replace procedure courier_salary()
+language plpgsql
+set search_path to kuzmin_food, exts
+as $$
+declare
+    v_year smallint;
+    v_month smallint;
+    v_courier record;
+    v_order_count int;
+    v_commission numeric(12,2);
+    v_coefficient numeric(3,2);
+    v_new_coefficient numeric(3,2);
+    v_amount numeric(12,2);
+begin
+    v_year := extract(year from localtimestamp)::smallint;
+    v_month := extract(month from localtimestamp)::smallint;
+
+    for v_courier in
+        select courier_id, status, coefficient
+        from courier
+    loop
+        select count(*), coalesce(sum(commission), 0)
+        into v_order_count, v_commission
+        from "order"
+        where courier_id = v_courier.courier_id
+          and status = 'доставлен'
+          and extract(year from order_timestamp) = v_year
+          and extract(month from order_timestamp) = v_month;
+
+        select coefficient_used
+        into v_coefficient
+        from courier_pay
+        where year = v_year
+          and month = v_month
+          and courier_id = v_courier.courier_id;
+
+        if not found then
+            v_coefficient := v_courier.coefficient;
+        end if;
+
+        if v_order_count <= 150 then
+            v_new_coefficient := 0.1;
+        elsif v_order_count <= 250 then
+            v_new_coefficient := 0.2;
+        elsif v_order_count <= 500 then
+            v_new_coefficient := 0.3;
+        else
+            v_new_coefficient := 0.5;
+        end if;
+
+        v_amount := round(v_commission * v_coefficient, 2);
+
+        insert into courier_pay (year, month, courier_id, amount,
+                                 coefficient_used)
+        values (v_year, v_month, v_courier.courier_id, v_amount,
+                v_coefficient)
+        on conflict (year, month, courier_id) do update
+        set amount = excluded.amount,
+            coefficient_used = excluded.coefficient_used;
+
+        if v_courier.status <> 'уволен' then
+            update courier
+            set coefficient = v_new_coefficient
+            where courier_id = v_courier.courier_id;
+        end if;
+    end loop;
+end $$;
