@@ -572,8 +572,9 @@ WHERE table_schema = '<фамилия>_food'
 ORDER BY ordinal_position;
 ```
 
-Ожидается: `year_month` (text), `sum_no_commission`, `sum_with_commission`, `commission`, `prev_commission`, `commission_diff`, `courier_pay`, `net_profit` (numeric).
-Факт: ___
+Ожидается: `year_month` (text), `sum_no_commission`, `sum_with_commission`, `commission`, `prev_commission`, `commission_diff`, `courier_pay`, `net_profit` (numeric).  
+Факт: 8 колонок в нужном порядке: `year_month` (`text`), остальные семь — `numeric`.  
+Вердикт: OK
 
 ### F.2. Месяцы покрыты
 
@@ -581,8 +582,9 @@ ORDER BY ordinal_position;
 SELECT * FROM how_much_money ORDER BY year_month;
 ```
 
-Ожидается: месяцы от первого доставленного заказа до последнего (не пропущено ни одного).
-Факт: ___
+Ожидается: месяцы от первого доставленного заказа до последнего (не пропущено ни одного).  
+Факт: 6 строк: `2026-06`, `2026-07`, `2026-08`, `2026-09`, `2026-10`, `2026-11`. Первый доставленный заказ — 2026-06, последний — 2026-11; все месяцы между ними присутствуют.  
+Вердикт: OK
 
 ### F.3. Месяцы без заказов присутствуют (BR-11.9)
 
@@ -591,8 +593,9 @@ SELECT year_month FROM how_much_money
 WHERE sum_no_commission = 0 OR sum_no_commission IS NULL;
 ```
 
-Ожидается: если в какие-то месяцы заказов не было — они есть в результате.
-Факт: ___
+Ожидается: если в какие-то месяцы заказов не было — они есть в результате.  
+Факт: на данных `insert_test_data(10)` доставленные заказы есть во всех шести месяцах, поэтому запрос вернул 0 строк. Отдельно проверено в транзакции: после добавления доставленного заказа в 2027-02 отчёт содержал 9 строк, и в нём появились пустые месяцы `2026-12` (суммы, комиссия, выплаты и прибыль — 0.00, `prev_commission = 370.20`, `commission_diff = -370.20`) и `2027-01` (все суммы 0.00, `prev_commission = 0.00`, `commission_diff = 0.00`). После отката данные вернулись.  
+Вердикт: OK
 
 ### F.4. Корректность сумм
 
@@ -615,7 +618,19 @@ LIMIT 10;
 - `commission_diff = commission - prev_commission` (NULL для первого месяца).
 - `net_profit = commission - courier_pay`.
 
-Факт: ___
+Факт:
+
+| year_month | sum_no_commission | sum_with_commission | commission | prev_commission | commission_diff | courier_pay | net_profit |
+|---|---|---|---|---|---|---|---|
+| 2026-06 | 5710.00 | 6281.00 | 571.00 | NULL | NULL | 57.10 | 513.90 |
+| 2026-07 | 7763.00 | 8539.30 | 776.30 | 571.00 | 205.30 | 77.63 | 698.67 |
+| 2026-08 | 11659.00 | 12824.90 | 1165.90 | 776.30 | 389.60 | 116.59 | 1049.31 |
+| 2026-09 | 9666.00 | 10632.60 | 966.60 | 1165.90 | -199.30 | 96.66 | 869.94 |
+| 2026-10 | 12314.00 | 13545.40 | 1231.40 | 966.60 | 264.80 | 123.14 | 1108.26 |
+| 2026-11 | 3702.00 | 4072.20 | 370.20 | 1231.40 | -861.20 | 37.02 | 333.18 |
+
+Во всех строках `commission = sum_with_commission - sum_no_commission`, `commission_diff = commission - prev_commission` (у первого месяца `NULL`), `net_profit = commission - courier_pay`.  
+Вердикт: OK
 
 ---
 

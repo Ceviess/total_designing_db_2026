@@ -73,3 +73,72 @@ as $$
     left join best_clients bc on bc.restaurant_id = r.restaurant_id
     order by r.restaurant_name;
 $$;
+
+
+-- Отчёт сколько денег по месяцам.
+
+create or replace view how_much_money as
+with recursive months as (
+    select date_trunc('month', min(order_timestamp)) as month_start
+    from kuzmin_food."order"
+    where status = 'доставлен'
+    having count(*) > 0
+
+    union all
+
+    select m.month_start + interval '1 month'
+    from months m
+    where m.month_start + interval '1 month' <= (
+        select date_trunc('month', max(order_timestamp))
+        from kuzmin_food."order"
+        where status = 'доставлен'
+    )
+),
+
+order_totals as (
+    select date_trunc('month', order_timestamp) as month_start,
+           sum(order_amount) as sum_no_commission,
+           sum(total_amount) as sum_with_commission
+    from kuzmin_food."order"
+    where status = 'доставлен'
+    group by date_trunc('month', order_timestamp)
+),
+pay_totals as (
+    select make_date(year, month, 1) as month_start,
+           sum(amount) as courier_pay
+    from kuzmin_food.courier_pay
+    group by make_date(year, month, 1)
+),
+month_report as (
+    select m.month_start,
+           coalesce(ot.sum_no_commission, 0)::numeric(12,2)
+               as sum_no_commission,
+           coalesce(ot.sum_with_commission, 0)::numeric(12,2)
+               as sum_with_commission,
+           coalesce(ot.sum_with_commission, 0)::numeric(12,2)
+               - coalesce(ot.sum_no_commission, 0)::numeric(12,2)
+               as commission,
+           coalesce(pt.courier_pay, 0)::numeric(12,2)
+               as courier_pay
+    from months m
+    left join order_totals ot on ot.month_start = m.month_start
+    left join pay_totals pt on pt.month_start = m.month_start
+),
+with_prev as (
+    select month_start,
+           sum_no_commission,
+           sum_with_commission,
+           commission,
+           lag(commission) over (order by month_start) as prev_commission,
+           courier_pay
+    from month_report
+)
+select to_char(month_start, 'YYYY-MM') as year_month,
+       sum_no_commission,
+       sum_with_commission,
+       commission,
+       prev_commission,
+       commission - prev_commission as commission_diff,
+       courier_pay,
+       commission - courier_pay as net_profit
+from with_prev;
