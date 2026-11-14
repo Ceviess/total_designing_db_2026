@@ -644,53 +644,57 @@ SELECT
     has_schema_privilege('inspector', nspname, 'USAGE')  AS usage,
     has_schema_privilege('inspector', nspname, 'CREATE') AS create
 FROM pg_namespace
-WHERE nspname = '<фамилия>_food';
+WHERE nspname = 'kuzmin_food';
 ```
 
-Ожидается: `<фамилия>_food`, `true`, `true` (полный доступ).
-Факт: ___
+Ожидается: `kuzmin_food`, `true`, `true` (полный доступ).  
+Факт: `kuzmin_food`, `usage = true`, `create = true`. Скрипт прав применён повторно — без ошибок.  
+Вердикт: OK
 
 ### G.2. Права на таблицы
 
 ```sql
 SELECT table_name, string_agg(privilege_type, ', ') AS privs
 FROM information_schema.role_table_grants
-WHERE grantee = 'inspector' AND table_schema = '<фамилия>_food'
+WHERE grantee = 'inspector' AND table_schema = 'kuzmin_food'
 GROUP BY table_name;
 ```
 
-Ожидается: у каждой таблицы `SELECT, INSERT, UPDATE, DELETE` (или `ALL`).
-Факт: ___
+Ожидается: у каждой таблицы `SELECT, INSERT, UPDATE, DELETE` (или `ALL`).  
+Факт: 13 строк — 12 таблиц и представление `how_much_money`; у каждой `DELETE, INSERT, SELECT, UPDATE`.  
+Вердикт: OK
 
 ### G.3. `information_schema` читается под `inspector`
 
 ```sql
 SET ROLE inspector;
 SELECT count(*) FROM information_schema.tables
-WHERE table_schema = '<фамилия>_food';
+WHERE table_schema = 'kuzmin_food';
 RESET ROLE;
 ```
 
-Ожидается: 12 + N (количество таблиц).
-Факт: ___
+Ожидается: 12 + N (количество таблиц).  
+Факт: 13 — 12 таблиц и представление `how_much_money`.  
+Вердикт: OK
 
 ### G.4. `pg_catalog` читается под `inspector`
 
 ```sql
 SET ROLE inspector;
 SELECT count(*) FROM pg_catalog.pg_tables
-WHERE schemaname = '<фамилия>_food';
+WHERE schemaname = 'kuzmin_food';
 RESET ROLE;
 ```
 
-Ожидается: 12 + N.
-Факт: ___
+Ожидается: 12 + N.  
+Факт: 12.  
+Вердикт: OK
 
 ### G.5. Все процедуры/функции работают под `inspector`
 
 ```sql
 SET ROLE inspector;
-SET search_path TO <фамилия>_food, exts;
+SET search_path TO kuzmin_food, exts;
 
 CALL erase_test_data();
 CALL insert_test_data(10);
@@ -701,8 +705,9 @@ SELECT * FROM how_much_money LIMIT 5;
 RESET ROLE;
 ```
 
-Ожидается: без `permission denied`.
-Факт: ___
+Ожидается: без `permission denied`.  
+Факт: под `SET ROLE inspector` и отдельным подключением под `inspector` выполнены `erase_test_data()`, `insert_test_data(10)`, `add_product(...)`, `courier_salary()`, `get_statistic()` (10 строк) и `how_much_money` (6 строк); ошибок `permission denied` нет.  
+Вердикт: OK
 
 ---
 
