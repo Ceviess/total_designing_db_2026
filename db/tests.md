@@ -11,7 +11,8 @@
 | Параметр | Значение |
 |---|---|
 | PostgreSQL version | `PostgreSQL 17.9 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit` |
-| Дата проверки | 2026-11-13 |
+| pg_dump version | `17.12` |
+| Дата проверки | 2026-11-14 |
 | Схема | `kuzmin_food` |
 | Роль-аудитор | `inspector` |
 
@@ -25,21 +26,21 @@
 
 ### A.1. Восстановление бэкапа
 
-Ожидается: без ошибок.
-Факт: ___
-Вердикт: ___
+Ожидается: без ошибок.  
+Факт: `pg_restore` завершился с кодом 0, сообщений об ошибках нет. В пустую базу `foodexpress_restore`, где заранее созданы схема `exts` и расширение `uuid-ossp`, восстановлены все 75 объектов архива. Дамп снят `pg_dump` 17.12 с сервера 17.9 — мажорная версия одна.  
+Вердикт: OK
 
 ### A.2. Переключение на inspector
 
 ```sql
 SET ROLE inspector;
-SET search_path TO <фамилия>_food, exts;
+SET search_path TO kuzmin_food, exts;
 SELECT current_user;
 ```
 
-Ожидается: `inspector`.
-Факт: ___
-Вердикт: ___
+Ожидается: `inspector`.  
+Факт: Подключение выполнено отдельной учётной записью `inspector`; `current_user` и `session_user` — `inspector`.  
+Вердикт: OK
 
 ---
 
@@ -52,8 +53,9 @@ SELECT schema_name FROM information_schema.schemata
 WHERE schema_name LIKE '%_food';
 ```
 
-Ожидается: `<фамилия>_food`.
-Факт: ___
+Ожидается: `kuzmin_food`.  
+Факт: `kuzmin_food`.  
+Вердикт: OK
 
 ### B.2. Схема `exts` с `uuid-ossp`
 
@@ -62,32 +64,35 @@ SELECT extname, extnamespace::regnamespace AS schema
 FROM pg_extension WHERE extname = 'uuid-ossp';
 ```
 
-Ожидается: `uuid-ossp`, схема `exts`.
-Факт: ___
+Ожидается: `uuid-ossp`, схема `exts`.  
+Факт: `uuid-ossp`, схема `exts`.  
+Вердикт: OK
 
 ### B.3. Все 12 исходных таблиц + N после нормализации
 
 ```sql
 SELECT table_name FROM information_schema.tables
-WHERE table_schema = '<фамилия>_food'
+WHERE table_schema = 'kuzmin_food'
 ORDER BY table_name;
 ```
 
-Ожидается: `address`, `client`, `client_address`, `courier`, `courier_pay`, `order`, `order_structure`, `payment`, `product`, `product_category`, `restaurant`, `review` (12 + N штук).
-Факт: ___
+Ожидается: `address`, `client`, `client_address`, `courier`, `courier_pay`, `order`, `order_structure`, `payment`, `product`, `product_category`, `restaurant`, `review` (12 + N штук).  
+Факт: 13 строк: 12 таблиц (`address`, `client`, `client_address`, `courier`, `courier_pay`, `order`, `order_structure`, `payment`, `product`, `product_category`, `restaurant`, `review`) и представление `how_much_money`.  
+Вердикт: OK
 
 ### B.4. Все PK — `uuid`
 
 ```sql
 SELECT table_name, column_name, data_type
 FROM information_schema.columns
-WHERE table_schema = '<фамилия>_food'
+WHERE table_schema = 'kuzmin_food'
   AND column_name LIKE '%_id'
   AND data_type != 'uuid';
 ```
 
-Ожидается: пусто.
-Факт: ___
+Ожидается: пусто.  
+Факт: Пусто: все первичные и внешние ключи имеют тип `uuid`.  
+Вердикт: OK
 
 ### B.5. Enum-типы
 
@@ -96,13 +101,14 @@ SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) AS values
 FROM pg_type t
 JOIN pg_enum e ON t.oid = e.enumtypid
 JOIN pg_namespace n ON n.oid = t.typnamespace
-WHERE n.nspname = '<фамилия>_food'
+WHERE n.nspname = 'kuzmin_food'
 GROUP BY t.typname
 ORDER BY t.typname;
 ```
 
-Ожидается: 8 типов со значениями из constraints.md.
-Факт: ___
+Ожидается: 8 типов со значениями из constraints.md.  
+Факт: 8 типов: `restaurant_status` (`активен`, `неактивен`), `product_status` (`доступно`, `нет_в_наличии`, `архив`), `courier_status` (`свободен`, `занят`, `на_доставке`, `уволен`), `order_status` (`создан`, `готовится`, `в_доставке`, `доставлен`, `отменён`), `order_pay_status` (`ожидает`, `оплачен`, `ошибка`), `payment_status` (`успех`, `ошибка`, `в_обработке`), `payment_type` (`карта`, `наличные`, `безнал`), `review_entity_type` (`блюдо`, `ресторан`, `заказ`).  
+Вердикт: OK
 
 ### B.6. FK-ограничения
 
@@ -110,12 +116,13 @@ ORDER BY t.typname;
 SELECT conname, conrelid::regclass AS tbl, confrelid::regclass AS ref
 FROM pg_constraint
 WHERE contype = 'f'
-  AND connamespace = '<фамилия>_food'::regnamespace
+  AND connamespace = 'kuzmin_food'::regnamespace
 ORDER BY tbl, conname;
 ```
 
-Ожидается: не менее 15 FK, все из erd.md.
-Факт: ___
+Ожидается: не менее 15 FK, все из erd.md.  
+Факт: 16 внешних ключей: 5 у `order`, по 2 у `client_address`, `order_structure`, `product`, `review`, по 1 у `restaurant`, `payment`, `courier_pay`.  
+Вердикт: OK
 
 ### B.7. Пароль — MD5
 
@@ -124,8 +131,9 @@ SELECT length(password) AS len, password
 FROM client LIMIT 5;
 ```
 
-Ожидается: `len = 32`, hex-строка.
-Факт: ___
+Ожидается: `len = 32`, hex-строка.  
+Факт: в выборке 5 строк, у всех длина пароля 32; дополнительно проверена вся таблица — 10 строк, все значения — hex-строки из символов `0-9a-f`.  
+Вердикт: OK
 
 ---
 
@@ -137,8 +145,9 @@ FROM client LIMIT 5;
 CALL erase_test_data();
 ```
 
-Ожидается: без ошибок.
-Факт: ___
+Ожидается: без ошибок.  
+Факт: Без ошибок; все 12 таблиц очищены.  
+Вердикт: OK
 
 ### C.2. Первый запуск
 
@@ -146,8 +155,9 @@ CALL erase_test_data();
 CALL insert_test_data(10);
 ```
 
-Ожидается: без ошибок.
-Факт: ___
+Ожидается: без ошибок.  
+Факт: Без ошибок; сгенерирован набор из 10 клиентов.  
+Вердикт: OK
 
 ### C.3. Распределение строк (BR-11.7)
 
@@ -164,8 +174,9 @@ UNION ALL SELECT 'payment', count(*) FROM payment
 ORDER BY tbl;
 ```
 
-Ожидается: 10, 10, 10, 10, 50, 50, 50, 50, 50.
-Факт: ___
+Ожидается: 10, 10, 10, 10, 50, 50, 50, 50, 50.  
+Факт: 10, 10, 10, 10, 50, 50, 50, 50, 50 — совпадает с BR-11.7.  
+Вердикт: OK
 
 ### C.4. Адреса ресторанов vs клиентов (BR-11.7)
 
@@ -175,8 +186,9 @@ UNION ALL
 SELECT 'total addresses', count(*) FROM address;
 ```
 
-Ожидается: 10 ресторанных адресов, 50 всего → 40 клиентских.
-Факт: ___
+Ожидается: 10 ресторанных адресов, 50 всего → 40 клиентских.  
+Факт: 10 адресов у ресторанов, 50 всего, 40 клиентских; в `client_address` 40 связей.  
+Вердикт: OK
 
 ### C.5. Нет пустых строк (BR-11.3)
 
@@ -185,8 +197,9 @@ SELECT count(*) FROM client WHERE login = '' OR password = '' OR phone_number = 
 -- и аналогично для других varchar-полей с NOT NULL
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0 пустых строк во всех обязательных `varchar` и `text` столбцах; запрос из блока расширен на остальные таблицы по той же схеме.  
+Вердикт: OK
 
 ### C.6. Нет NULL там, где запрещено (BR-11.3)
 
@@ -196,8 +209,9 @@ SELECT count(*) FROM "order" WHERE client_id IS NULL OR restaurant_id IS NULL
 -- и аналогично для других NOT NULL полей
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0 `NULL` во всех `NOT NULL` столбцах; запрос из блока расширен на остальные таблицы по той же схеме.  
+Вердикт: OK
 
 ### C.7. Минимум один активный курьер (BR-6.6)
 
@@ -205,8 +219,9 @@ SELECT count(*) FROM "order" WHERE client_id IS NULL OR restaurant_id IS NULL
 SELECT count(*) FROM courier WHERE status != 'уволен';
 ```
 
-Ожидается: `>= 1`.
-Факт: ___
+Ожидается: `>= 1`.  
+Факт: 8 работающих курьеров; 2 из 10 уволены.  
+Вердикт: OK
 
 ### C.8. `courier_pay` консистентен с правилами (BR-10.2)
 
@@ -224,8 +239,9 @@ FROM courier_pay cp
 LIMIT 20;
 ```
 
-Ожидается: `amount = expected_amount` в каждой строке.
-Факт: ___
+Ожидается: `amount = expected_amount` в каждой строке.  
+Факт: в выборке 20 строк расхождений нет; дополнительно проверены все 60 строк (10 курьеров × 6 месяцев) — расхождений 0, суммы от 0.00 до 36.66.  
+Вердикт: OK
 
 ### C.9. Повторный вызов не ломает
 
@@ -238,8 +254,9 @@ BEGIN
 END $$;
 ```
 
-Ожидается: без ошибок, данные добавляются или заменяются (по решению студента, задокументированному в constraints.md).
-Факт: ___
+Ожидается: без ошибок, данные добавляются или заменяются (по решению студента, задокументированному в constraints.md).    
+Факт: 10 повторных вызовов подряд прошли без ошибок; каждый вызов заменяет предыдущий набор, а не добавляет новый.  
+Вердикт: OK
 
 ---
 
@@ -284,8 +301,9 @@ LEFT JOIN address a ON ca.address_id = a.address_id
 WHERE a.address_id IS NULL;
 ```
 
-Ожидается: все 0.
-Факт: ___
+Ожидается: все 0.  
+Факт: Все 7 проверок вернули 0 orphan-строк.  
+Вердикт: OK
 
 ### D.2. Минимальная сумма заказа (BR-1.8)
 
@@ -293,8 +311,9 @@ WHERE a.address_id IS NULL;
 SELECT count(*) FROM "order" WHERE total_amount < 1000;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.3. Комиссия = 10% (BR-1.4)
 
@@ -302,8 +321,9 @@ SELECT count(*) FROM "order" WHERE total_amount < 1000;
 SELECT count(*) FROM "order" WHERE round(order_amount * 0.10, 2) != commission;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.4. `total_amount = order_amount + commission`
 
@@ -312,8 +332,9 @@ SELECT count(*) FROM "order"
 WHERE round(order_amount + commission, 2) != total_amount;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.5. Дата доставки не раньше создания (BR-7.13)
 
@@ -322,8 +343,9 @@ SELECT count(*) FROM "order"
 WHERE delivery_timestamp IS NOT NULL AND delivery_timestamp < order_timestamp;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.6. Адрес доставки принадлежит клиенту (BR-7.4)
 
@@ -334,8 +356,9 @@ LEFT JOIN client_address ca
 WHERE ca.client_id IS NULL;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.    
+Факт: 0.  
+Вердикт: OK
 
 ### D.7. Все блюда в заказе из одного ресторана (BR-7.3)
 
@@ -347,8 +370,9 @@ JOIN product p ON os.product_id = p.product_id
 WHERE p.restaurant_id != o.restaurant_id;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.8. Ровно одна успешная оплата на заказ (BR-8.1)
 
@@ -360,8 +384,9 @@ GROUP BY order_id
 HAVING count(*) != 1;
 ```
 
-Ожидается: пусто.
-Факт: ___
+Ожидается: пусто.  
+Факт: Пусто, у каждого заказа ровно одна успешная оплата.  
+Вердикт: OK
 
 ### D.9. Сумма оплаты = `total_amount` заказа (BR-8.4)
 
@@ -371,8 +396,9 @@ JOIN "order" o ON p.order_id = o.order_id
 WHERE p.amount != o.total_amount;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.10. Нет дубликатов в `client_address` (BR-2.5)
 
@@ -383,8 +409,9 @@ GROUP BY client_id, address_id
 HAVING count(*) > 1;
 ```
 
-Ожидается: пусто.
-Факт: ___
+Ожидается: пусто.  
+Факт: Пусто.  
+Вердикт: OK
 
 ### D.11. Нет дубликатов в `order_structure` (BR-7.16)
 
@@ -395,8 +422,9 @@ GROUP BY order_id, product_id
 HAVING count(*) > 1;
 ```
 
-Ожидается: пусто.
-Факт: ___
+Ожидается: пусто.  
+Факт: Пусто.  
+Вердикт: OK
 
 ### D.12. `work_end > work_start` (BR-4.4)
 
@@ -404,8 +432,9 @@ HAVING count(*) > 1;
 SELECT count(*) FROM restaurant WHERE work_end <= work_start;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.13. `dismissal_date >= hire_date` (BR-6.3)
 
@@ -414,8 +443,9 @@ SELECT count(*) FROM courier
 WHERE dismissal_date IS NOT NULL AND dismissal_date < hire_date;
 ```
 
-Ожидается: 0.
-Факт: ___
+Ожидается: 0.  
+Факт: 0.  
+Вердикт: OK
 
 ### D.14. Рейтинг блюд/ресторанов соответствует отзывам (BR-9.6)
 
@@ -429,8 +459,9 @@ WHERE p.rating IS NOT NULL
 LIMIT 20;
 ```
 
-Ожидается: `rating = expected`.
-Факт: ___
+Ожидается: `rating = expected`.  
+Факт: запрос вернул 8 блюд с заполненным рейтингом; у всех рейтинг равен `round(avg(review.rating), 2)`. Дополнительно тем же условием проверены все 10 ресторанов: у 8 заполненный рейтинг совпадает со средним, у 2 отзывов нет и рейтинг `NULL`.  
+Вердикт: OK
 
 ---
 
@@ -455,8 +486,9 @@ CALL add_product(
 SELECT count(*) AS after FROM product;
 ```
 
-Ожидается: `after = before + 1`.
-Факт: ___
+Ожидается: `after = before + 1`.  
+Факт: `before = 50`, `after = 51` — блюдо добавлено; вызов выполнен под `inspector`.  
+Вердикт: OK
 
 ### E.2. `add_product` — падает на несуществующий ресторан
 
@@ -467,8 +499,9 @@ CALL add_product(
 );
 ```
 
-Ожидается: ошибка с внятным сообщением.
-Факт: ___
+Ожидается: ошибка с внятным сообщением.  
+Факт: Ошибка `P0002`: `add_product: ресторан с идентификатором 00000000-0000-0000-0000-000000000000 не найден`.  
+Вердикт: OK
 
 ### E.3. `rating_change` — пересчитывает рейтинг
 
@@ -492,8 +525,9 @@ VALUES (
 SELECT rating FROM product WHERE product_id = <product_id>;
 ```
 
-Ожидается: `rating` пересчитан.
-Факт: ___
+Ожидается: `rating` пересчитан.  
+Факт: Рейтинг блюда до вставки 4.00, после вставки отзыва с оценкой 5 — 4.50; триггер пересчитал среднее.  
+Вердикт: OK
 
 ### E.4. `rating_change` — удаление отзыва
 
@@ -504,8 +538,9 @@ DELETE FROM review WHERE review_id = <review_id>;
 SELECT rating FROM product WHERE product_id = <product_id>;
 ```
 
-Ожидается: если других отзывов нет — `rating IS NULL`; иначе — пересчитан.
-Факт: ___
+Ожидается: если других отзывов нет — `rating IS NULL`; иначе — пересчитан.  
+Факт: После удаления тестового отзыва рейтинг вернулся к 4.00 — пересчёт по оставшимся отзывам.  
+Вердикт: OK
 
 ### E.5. `get_statistic()`
 
@@ -542,7 +577,7 @@ LIMIT 20;
 - У уволенных — не изменился.
 - `courier_pay` содержит запись за текущий месяц.
 
-Факт: до вызова 8 работающих и 2 уволенных курьера имели коэффициент 0.10. После вызова у всех те же 0.10: у работающих пересчёт по BR-10.2 дал 0.1, потому что в текущем месяце всего 3 доставленных заказа, максимум 1 на курьера, а следующий порог начинается со 151 доставки; у уволенных коэффициент не назначался. Записей `courier_pay` за текущий месяц до и после вызова по 10 — по одной на курьера, суммы от 0.00 до 15.74, `coefficient_used = 0.10`. При тестовых объёмах коэффициент не меняется: доставок на курьера слишком мало, чтобы дойти до порога 151.  
+Факт: до вызова 8 работающих и 2 уволенных курьера имели коэффициент 0.10. После вызова у всех те же 0.10: у работающих пересчёт по BR-10.2 дал 0.1, потому что в текущем месяце 4 доставленных заказа, по одному на четырёх курьеров, а следующий порог начинается со 151 доставки; у уволенных коэффициент не менялся. Записей `courier_pay` за текущий месяц до и после вызова по 10 — по одной на курьера, суммы от 0.00 до 15.74, `coefficient_used = 0.10`. При тестовых объёмах коэффициент не меняется: доставок на курьера слишком мало, чтобы дойти до порога 151.    
 Вердикт: OK
 
 ### E.7. `courier_salary()` — повторный вызов
@@ -554,8 +589,8 @@ WHERE year = extract(year from current_date)
   AND month = extract(month from current_date);
 ```
 
-Ожидается: количество не изменилось (idempotency / обновление).  
-Факт: повторный вызов оставил те же 10 записей за текущий месяц, дублей нет; суммы и `coefficient_used` не изменились. Дополнительно проверено на наборе с 151 доставкой: первый вызов поставил коэффициент 0.2, повторный вызов оставил сумму и `coefficient_used` без изменений.
+Ожидается: количество не изменилось (idempotency / обновление).    
+Факт: повторный вызов оставил те же 10 записей за текущий месяц, дублей нет; суммы и `coefficient_used` не изменились. Дополнительно в транзакции на 151 доставленном заказе одного курьера первый вызов поставил коэффициент 0.20, второй оставил одну запись за месяц без дубля; после отката изменения не сохранились.  
 Вердикт: OK
 
 ---
@@ -567,7 +602,7 @@ WHERE year = extract(year from current_date)
 ```sql
 SELECT column_name, data_type
 FROM information_schema.columns
-WHERE table_schema = '<фамилия>_food'
+WHERE table_schema = 'kuzmin_food'
   AND table_name = 'how_much_money'
 ORDER BY ordinal_position;
 ```
@@ -593,8 +628,8 @@ SELECT year_month FROM how_much_money
 WHERE sum_no_commission = 0 OR sum_no_commission IS NULL;
 ```
 
-Ожидается: если в какие-то месяцы заказов не было — они есть в результате.  
-Факт: на данных `insert_test_data(10)` доставленные заказы есть во всех шести месяцах, поэтому запрос вернул 0 строк. Отдельно проверено в транзакции: после добавления доставленного заказа в 2027-02 отчёт содержал 9 строк, и в нём появились пустые месяцы `2026-12` (суммы, комиссия, выплаты и прибыль — 0.00, `prev_commission = 370.20`, `commission_diff = -370.20`) и `2027-01` (все суммы 0.00, `prev_commission = 0.00`, `commission_diff = 0.00`). После отката данные вернулись.  
+Ожидается: если в какие-то месяцы заказов не было — они есть в результате.    
+Факт: на данных `insert_test_data(10)` доставленные заказы есть во всех шести месяцах, поэтому запрос вернул 0 строк. Отдельно проверено в транзакции: после добавления доставленного заказа в 2027-02 отчёт содержал 9 строк, и в нём появились пустые месяцы `2026-12` (суммы, комиссия, выплаты и прибыль — 0.00, `prev_commission = 470.20`, `commission_diff = -470.20`) и `2027-01` (все суммы 0.00, `prev_commission = 0.00`, `commission_diff = 0.00`). После отката данные вернулись.   
 Вердикт: OK
 
 ### F.4. Корректность сумм
@@ -622,12 +657,12 @@ LIMIT 10;
 
 | year_month | sum_no_commission | sum_with_commission | commission | prev_commission | commission_diff | courier_pay | net_profit |
 |---|---|---|---|---|---|---|---|
-| 2026-06 | 5710.00 | 6281.00 | 571.00 | NULL | NULL | 57.10 | 513.90 |
-| 2026-07 | 7763.00 | 8539.30 | 776.30 | 571.00 | 205.30 | 77.63 | 698.67 |
-| 2026-08 | 11659.00 | 12824.90 | 1165.90 | 776.30 | 389.60 | 116.59 | 1049.31 |
-| 2026-09 | 9666.00 | 10632.60 | 966.60 | 1165.90 | -199.30 | 96.66 | 869.94 |
-| 2026-10 | 12314.00 | 13545.40 | 1231.40 | 966.60 | 264.80 | 123.14 | 1108.26 |
-| 2026-11 | 3702.00 | 4072.20 | 370.20 | 1231.40 | -861.20 | 37.02 | 333.18 |
+| 2026-06 | 4616.00 | 5077.60 | 461.60 | NULL | NULL | 46.16 | 415.44 |
+| 2026-07 | 8857.00 | 9742.70 | 885.70 | 461.60 | 424.10 | 88.57 | 797.13 |
+| 2026-08 | 11659.00 | 12824.90 | 1165.90 | 885.70 | 280.20 | 116.59 | 1049.31 |
+| 2026-09 | 8388.00 | 9226.80 | 838.80 | 1165.90 | -327.10 | 83.88 | 754.92 |
+| 2026-10 | 12592.00 | 13851.20 | 1259.20 | 838.80 | 420.40 | 125.92 | 1133.28 |
+| 2026-11 | 4702.00 | 5172.20 | 470.20 | 1259.20 | -789.00 | 47.02 | 423.18 |
 
 Во всех строках `commission = sum_with_commission - sum_no_commission`, `commission_diff = commission - prev_commission` (у первого месяца `NULL`), `net_profit = commission - courier_pay`.  
 Вердикт: OK
@@ -705,8 +740,8 @@ SELECT * FROM how_much_money LIMIT 5;
 RESET ROLE;
 ```
 
-Ожидается: без `permission denied`.  
-Факт: под `SET ROLE inspector` и отдельным подключением под `inspector` выполнены `erase_test_data()`, `insert_test_data(10)`, `add_product(...)`, `courier_salary()`, `get_statistic()` (10 строк) и `how_much_money` (6 строк); ошибок `permission denied` нет.  
+Ожидается: без `permission denied`.    
+Факт: под `SET ROLE inspector` и отдельным подключением под `inspector` выполнены `erase_test_data()`, `insert_test_data(10)`, `courier_salary()`, `get_statistic()` (10 строк) и `how_much_money` (6 строк); ошибок `permission denied` нет. `add_product(...)` под той же ролью проверен отдельно в E.1.   
 Вердикт: OK
 
 ---
@@ -723,8 +758,8 @@ SELECT c.courier_id,
 FROM courier c;
 ```
 
-Ожидается: два SubPlan, каждый — скан `"order"`. Время растёт линейно от числа курьеров.
-Факт: время 0.117 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`). Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=41`.
+Ожидается: два SubPlan, каждый — скан `"order"`. Время растёт линейно от числа курьеров.  
+Факт: время 0.180 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл). Из 50 заказов доставленных 40, поэтому каждая из двух веток читает по 40 строк. Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=261`.  
 Вердикт: OK
 
 ### H.2. `EXPLAIN ANALYZE` — паттерн «один JOIN»
@@ -739,9 +774,9 @@ LEFT JOIN "order" o ON o.courier_id = c.courier_id AND o.status = 'достав�
 GROUP BY c.courier_id;
 ```
 
-Ожидается: один `Hash Right Join` / `Hash Left Join`, один скан `"order"`. Время меньше, чем в H.1.
-Факт: время 0.042 мс. План: `HashAggregate` → `Hash Left Join` (`courier` × `"order"`) → `Seq Scan on courier` и один `Seq Scan on "order"` (40 строк, 10 отброшено по статусу), `Buffers: shared hit=3`.
-Вердикт: OK, таблица `"order"` просканирована один раз, время меньше, чем в H.1
+Ожидается: один `Hash Right Join` / `Hash Left Join`, один скан `"order"`. Время меньше, чем в H.1.  
+Факт: время 0.051 мс. План: `HashAggregate` → `Hash Left Join` (`courier` × `"order"`) → `Seq Scan on courier` и один `Seq Scan on "order"` (из 50 заказов 40 доставленных, 10 отброшено по статусу), `Buffers: shared hit=14`.
+Вердикт: OK
 
 ### H.3. Применить к `get_statistic`
 
@@ -749,8 +784,8 @@ GROUP BY c.courier_id;
 EXPLAIN ANALYZE SELECT * FROM get_statistic();
 ```
 
-Ожидается: без `LATERAL`, без множественных подзапросов к одной таблице, без оконных функций там, где хватает агрегата.
-Факт: время 0.377 мс. План: `Subquery Scan` → `Sort` → `CTE delivered_orders` (`Seq Scan on "order"`, 40 строк) → `CTE best_products` (`Unique` → `GroupAggregate` → `Hash Join` с `order_structure` и `Index Scan on product`) → `CTE best_clients` (`Unique` → `GroupAggregate` → `Hash Join` с `client`) → `Hash Left Join` с `restaurant`, `restaurant_totals`, `best_products` и `best_clients`. Каждая таблица встречается в плане один раз: `"order"`, `order_structure`, `product`, `client`, `restaurant`. `WindowAgg`, `LATERAL` и `SubPlan` отсутствуют.
+Ожидается: без `LATERAL`, без множественных подзапросов к одной таблице, без оконных функций там, где хватает агрегата.  
+Факт: время 0.400 мс. План: `Subquery Scan` → `Sort` → `CTE delivered_orders` (`Seq Scan on "order"`, из 50 строк 40 доставленных) → `CTE best_products` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Nested Loop` с `Bitmap Heap Scan` по `order_structure` и `Index Scan` по `product`) → `CTE best_clients` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Hash Join` с `client`) → `Hash Left Join` с `restaurant`, `restaurant_totals`, `best_products` и `best_clients`. Каждая таблица встречается в плане один раз: `"order"`, `order_structure`, `product`, `client`, `restaurant`. `Buffers: shared hit=432`. `WindowAgg`, `LATERAL` и `SubPlan` отсутствуют.  
 Вердикт: OK
 
 ---
@@ -776,8 +811,9 @@ UNION ALL SELECT 'client_address', count(*) FROM client_address
 UNION ALL SELECT 'courier_pay', count(*) FROM courier_pay;
 ```
 
-Ожидается: все 0.
-Факт: ___
+Ожидается: все 0.  
+Факт: Все 12 таблиц вернули 0 строк.  
+Вердикт: OK
 
 ### I.2. Повторный `erase_test_data` не падает
 
@@ -785,8 +821,9 @@ UNION ALL SELECT 'courier_pay', count(*) FROM courier_pay;
 CALL erase_test_data();
 ```
 
-Ожидается: без ошибок.
-Факт: ___
+Ожидается: без ошибок.  
+Факт: Повторный вызов прошёл без ошибок.  
+Вердикт: OK
 
 ### I.3. После очистки `insert_test_data` снова работает
 
@@ -795,6 +832,7 @@ CALL insert_test_data(10);
 SELECT count(*) FROM "order";
 ```
 
-Ожидается: 50.
-Факт: ___
+Ожидается: 50.  
+Факт: `insert_test_data(10)` прошёл, в `order` 50 строк.  
+Вердикт: OK
 

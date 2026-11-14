@@ -205,7 +205,7 @@ BR-8.1 требует ровно одну успешную попытку, но 
 
 | Таблица | Столбец | Что | Обоснование |
 |---|---|---|---|
-| `address`, `client`, `restaurant`, `courier`, `product_category`, `product` | `<...>_id` | `DEFAULT exts.uuid_generate_v4()` | BR-11.1: все ID — UUID и генерируются на сервере. |
+| `address`, `client`, `restaurant`, `courier`, `product_category`, `product` | `address_id`, `client_id`, `restaurant_id`, `courier_id`, `product_category_id`, `product_id` | `DEFAULT exts.uuid_generate_v4()` | BR-11.1: все ID — UUID и генерируются на сервере. |
 | `"order"`, `payment`, `review` | `order_id`, `payment_id`, `review_id` | `DEFAULT exts.uuid_generate_v4()` | BR-11.1: все ID — UUID и генерируются на сервере. |
 | `courier` | `coefficient` | `DEFAULT 0.1` | BR-6.5: изначальный коэффициент нового курьера — 0.1. |
 
