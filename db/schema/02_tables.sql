@@ -32,14 +32,14 @@ create table if not exists restaurant (
     restaurant_name varchar(50) not null,
     address_id uuid not null unique,
     description text not null,
-    work_start_time time not null,
-    work_end_time time not null,
+    work_start time not null,
+    work_end time not null,
     company_details text not null,
     rating numeric(3,2) null,
     status restaurant_status not null,
     constraint fk_restaurant_address foreign key (address_id) references address(address_id),
     constraint check_rating check (rating between 0 and 5),
-    constraint check_work_time check (work_end_time > work_start_time)
+    constraint check_work_time check (work_end > work_start)
 );
 
 create table if not exists courier (

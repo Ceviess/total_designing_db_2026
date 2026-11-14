@@ -125,7 +125,7 @@ begin
     from generate_series(1, value * 5) as i;
 
     insert into restaurant (restaurant_id, restaurant_name, address_id,
-                            description, work_start_time, work_end_time,
+                            description, work_start, work_end,
                             company_details, rating, status)
     select exts.uuid_generate_v4(),
            'Ресторан ' || a.rn,

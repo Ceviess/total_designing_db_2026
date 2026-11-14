@@ -472,19 +472,23 @@ LIMIT 20;
 ```sql
 SELECT count(*) AS before FROM product;
 
+SELECT restaurant_id AS rid FROM restaurant LIMIT 1 \gset
+SELECT product_category_id AS cid FROM product_category LIMIT 1 \gset
+
 CALL add_product(
-    p_restaurant_id => (SELECT restaurant_id FROM restaurant LIMIT 1),
-    p_product_category_id => (SELECT product_category_id FROM product_category LIMIT 1),
+    p_restaurant_id => :'rid',
+    p_product_category_id => :'cid',
     p_name => 'Тестовое блюдо',
     p_price => 250,
     p_rating => 4.5,
     p_status => 'доступно',
     p_description => 'Описание'
-    -- + photo_url если есть
 );
 
 SELECT count(*) AS after FROM product;
 ```
+
+Подзапрос в аргументе `CALL` недопустим (`cannot use subquery in CALL argument`), поэтому значения читаются в переменные `psql` через `\gset`.
 
 Ожидается: `after = before + 1`.  
 Факт: `before = 50`, `after = 51` — блюдо добавлено; вызов выполнен под `inspector`.  
@@ -493,9 +497,16 @@ SELECT count(*) AS after FROM product;
 ### E.2. `add_product` — падает на несуществующий ресторан
 
 ```sql
+SELECT product_category_id AS cid FROM product_category LIMIT 1 \gset
+
 CALL add_product(
     p_restaurant_id => '00000000-0000-0000-0000-000000000000',
-    -- остальные аргументы
+    p_product_category_id => :'cid',
+    p_name => 'Тестовое блюдо 2',
+    p_price => 250,
+    p_rating => 4.5,
+    p_status => 'доступно',
+    p_description => 'Описание'
 );
 ```
 
@@ -506,23 +517,29 @@ CALL add_product(
 ### E.3. `rating_change` — пересчитывает рейтинг
 
 ```sql
--- Выбрать заказ, блюдо и клиента
-SELECT p.product_id, p.rating FROM product p WHERE p.rating IS NOT NULL LIMIT 1;
+-- Блюдо, заказ и клиент, у которых ещё нет отзыва на это блюдо
+SELECT p.product_id, p.rating, o.order_id, o.client_id
+FROM product p
+JOIN order_structure os ON os.product_id = p.product_id
+JOIN "order" o ON o.order_id = os.order_id
+WHERE p.rating IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM review r
+      WHERE r.order_id = o.order_id
+        AND r.entity_type = 'блюдо'
+        AND r.entity_id = p.product_id
+  )
+LIMIT 1 \gset
 
--- Вставить отзыв на это блюдо
-INSERT INTO review (review_id, client_id, review_timestamp, entity_id, entity_type, order_id, description, rating)
-VALUES (
-    exts.uuid_generate_v4(),
-    (SELECT client_id FROM client LIMIT 1),
-    localtimestamp,
-    <product_id>,
-    'блюдо',
-    (SELECT order_id FROM "order" LIMIT 1),
-    'Тестовый отзыв',
-    5
-);
+SELECT :'product_id' AS product_id, :'rating'::numeric AS rating_before;
 
-SELECT rating FROM product WHERE product_id = <product_id>;
+INSERT INTO review (review_id, client_id, review_timestamp, entity_id, entity_type,
+                    order_id, description, rating)
+VALUES (exts.uuid_generate_v4(), :'client_id', localtimestamp, :'product_id',
+        'блюдо', :'order_id', 'Тестовый отзыв', 5)
+RETURNING review_id \gset
+
+SELECT rating FROM product WHERE product_id = :'product_id';
 ```
 
 Ожидается: `rating` пересчитан.  
@@ -532,10 +549,9 @@ SELECT rating FROM product WHERE product_id = <product_id>;
 ### E.4. `rating_change` — удаление отзыва
 
 ```sql
--- Удалить отзыв из E.3
-DELETE FROM review WHERE review_id = <review_id>;
+DELETE FROM review WHERE review_id = :'review_id';
 
-SELECT rating FROM product WHERE product_id = <product_id>;
+SELECT rating FROM product WHERE product_id = :'product_id';
 ```
 
 Ожидается: если других отзывов нет — `rating IS NULL`; иначе — пересчитан.  
@@ -759,7 +775,7 @@ FROM courier c;
 ```
 
 Ожидается: два SubPlan, каждый — скан `"order"`. Время растёт линейно от числа курьеров.  
-Факт: время 0.180 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл). Из 50 заказов доставленных 40, поэтому каждая из двух веток читает по 40 строк. Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=261`.  
+Факт: время 0.176 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл). Из 50 заказов доставленных 40, поэтому каждая из двух веток читает по 40 строк. Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=261`.  
 Вердикт: OK
 
 ### H.2. `EXPLAIN ANALYZE` — паттерн «один JOIN»
@@ -775,7 +791,7 @@ GROUP BY c.courier_id;
 ```
 
 Ожидается: один `Hash Right Join` / `Hash Left Join`, один скан `"order"`. Время меньше, чем в H.1.  
-Факт: время 0.051 мс. План: `HashAggregate` → `Hash Left Join` (`courier` × `"order"`) → `Seq Scan on courier` и один `Seq Scan on "order"` (из 50 заказов 40 доставленных, 10 отброшено по статусу), `Buffers: shared hit=14`.
+Факт: время 0.044 мс. План: `HashAggregate` → `Hash Left Join` (`courier` × `"order"`) → `Seq Scan on courier` и один `Seq Scan on "order"` (из 50 заказов 40 доставленных, 10 отброшено по статусу), `Buffers: shared hit=14`.
 Вердикт: OK
 
 ### H.3. Применить к `get_statistic`
@@ -785,7 +801,7 @@ EXPLAIN ANALYZE SELECT * FROM get_statistic();
 ```
 
 Ожидается: без `LATERAL`, без множественных подзапросов к одной таблице, без оконных функций там, где хватает агрегата.  
-Факт: время 0.400 мс. План: `Subquery Scan` → `Sort` → `CTE delivered_orders` (`Seq Scan on "order"`, из 50 строк 40 доставленных) → `CTE best_products` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Nested Loop` с `Bitmap Heap Scan` по `order_structure` и `Index Scan` по `product`) → `CTE best_clients` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Hash Join` с `client`) → `Hash Left Join` с `restaurant`, `restaurant_totals`, `best_products` и `best_clients`. Каждая таблица встречается в плане один раз: `"order"`, `order_structure`, `product`, `client`, `restaurant`. `Buffers: shared hit=432`. `WindowAgg`, `LATERAL` и `SubPlan` отсутствуют.  
+Факт: время 0.397 мс. План: `Subquery Scan` → `Sort` → `CTE delivered_orders` (`Seq Scan on "order"`, из 50 строк 40 доставленных) → `CTE best_products` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Nested Loop` с `Bitmap Heap Scan` по `order_structure` и `Index Scan` по `product`) → `CTE best_clients` (`Unique` → `Incremental Sort` → `GroupAggregate` → `Hash Join` с `client`) → `Hash Left Join` с `restaurant`, `restaurant_totals`, `best_products` и `best_clients`. Каждая таблица встречается в плане один раз: `"order"`, `order_structure`, `product`, `client`, `restaurant`. `Buffers: shared hit=432`. `WindowAgg`, `LATERAL` и `SubPlan` отсутствуют.  
 Вердикт: OK
 
 ---
