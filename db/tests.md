@@ -469,26 +469,32 @@ LIMIT 20;
 
 ### E.1. `add_product` — успешный вызов
 
+Аргументы `CALL` не принимают подзапросы (`cannot use subquery in CALL argument`), поэтому идентификаторы сначала читаются в переменные PL/pgSQL, а затем передаются в процедуру:
+
 ```sql
 SELECT count(*) AS before FROM product;
 
-SELECT restaurant_id AS rid FROM restaurant LIMIT 1 \gset
-SELECT product_category_id AS cid FROM product_category LIMIT 1 \gset
+DO $$
+DECLARE
+    v_restaurant uuid;
+    v_category   uuid;
+BEGIN
+    SELECT restaurant_id INTO v_restaurant FROM restaurant LIMIT 1;
+    SELECT product_category_id INTO v_category FROM product_category LIMIT 1;
 
-CALL add_product(
-    p_restaurant_id => :'rid',
-    p_product_category_id => :'cid',
-    p_name => 'Тестовое блюдо',
-    p_price => 250,
-    p_rating => 4.5,
-    p_status => 'доступно',
-    p_description => 'Описание'
-);
+    CALL add_product(
+        p_restaurant_id       => v_restaurant,
+        p_product_category_id => v_category,
+        p_name                => 'Тестовое блюдо',
+        p_price               => 250,
+        p_rating              => 4.5,
+        p_status              => 'доступно',
+        p_description         => 'Описание'
+    );
+END $$;
 
 SELECT count(*) AS after FROM product;
 ```
-
-Подзапрос в аргументе `CALL` недопустим (`cannot use subquery in CALL argument`), поэтому значения читаются в переменные `psql` через `\gset`.
 
 Ожидается: `after = before + 1`.  
 Факт: `before = 50`, `after = 51` — блюдо добавлено; вызов выполнен под `inspector`.  
@@ -497,17 +503,22 @@ SELECT count(*) AS after FROM product;
 ### E.2. `add_product` — падает на несуществующий ресторан
 
 ```sql
-SELECT product_category_id AS cid FROM product_category LIMIT 1 \gset
+DO $$
+DECLARE
+    v_category uuid;
+BEGIN
+    SELECT product_category_id INTO v_category FROM product_category LIMIT 1;
 
-CALL add_product(
-    p_restaurant_id => '00000000-0000-0000-0000-000000000000',
-    p_product_category_id => :'cid',
-    p_name => 'Тестовое блюдо 2',
-    p_price => 250,
-    p_rating => 4.5,
-    p_status => 'доступно',
-    p_description => 'Описание'
-);
+    CALL add_product(
+        p_restaurant_id       => '00000000-0000-0000-0000-000000000000',
+        p_product_category_id => v_category,
+        p_name                => 'Тестовое блюдо 2',
+        p_price               => 250,
+        p_rating              => 4.5,
+        p_status              => 'доступно',
+        p_description         => 'Описание'
+    );
+END $$;
 ```
 
 Ожидается: ошибка с внятным сообщением.  
@@ -518,7 +529,10 @@ CALL add_product(
 
 ```sql
 -- Блюдо, заказ и клиент, у которых ещё нет отзыва на это блюдо
-SELECT p.product_id, p.rating, o.order_id, o.client_id
+DROP TABLE IF EXISTS review_probe;
+
+CREATE TEMP TABLE review_probe AS
+SELECT p.product_id, p.rating AS rating_before, o.order_id, o.client_id
 FROM product p
 JOIN order_structure os ON os.product_id = p.product_id
 JOIN "order" o ON o.order_id = os.order_id
@@ -529,32 +543,48 @@ WHERE p.rating IS NOT NULL
         AND r.entity_type = 'блюдо'
         AND r.entity_id = p.product_id
   )
-LIMIT 1 \gset
+ORDER BY p.product_id
+LIMIT 1;
 
-SELECT :'product_id' AS product_id, :'rating'::numeric AS rating_before;
+SELECT product_id, rating_before FROM review_probe;
 
 INSERT INTO review (review_id, client_id, review_timestamp, entity_id, entity_type,
                     order_id, description, rating)
-VALUES (exts.uuid_generate_v4(), :'client_id', localtimestamp, :'product_id',
-        'блюдо', :'order_id', 'Тестовый отзыв', 5)
-RETURNING review_id \gset
+SELECT exts.uuid_generate_v4(), client_id, localtimestamp, product_id,
+       'блюдо', order_id, 'Тестовый отзыв', 5
+FROM review_probe;
 
-SELECT rating FROM product WHERE product_id = :'product_id';
+SELECT p.product_id, p.rating AS rating_after
+FROM product p
+JOIN review_probe rp ON rp.product_id = p.product_id;
 ```
 
-Ожидается: `rating` пересчитан.  
+Пара «заказ — блюдо» выбирается заранее и без отзыва, иначе вставка упрётся в `unique_review_entity`.
+
+Ожидается: `rating_after` пересчитан по всем отзывам блюда, то есть `rating_after = (rating_before * n + 5) / (n + 1)`, где `n` — число прежних отзывов; у блюда с единственным отзывом это `(rating_before + 5) / 2`.  
 Факт: Рейтинг блюда до вставки 4.00, после вставки отзыва с оценкой 5 — 4.50; триггер пересчитал среднее.  
 Вердикт: OK
 
 ### E.4. `rating_change` — удаление отзыва
 
 ```sql
-DELETE FROM review WHERE review_id = :'review_id';
+DROP TABLE IF EXISTS deleted_review;
 
-SELECT rating FROM product WHERE product_id = :'product_id';
+CREATE TEMP TABLE deleted_review AS
+SELECT entity_id
+FROM review
+WHERE description = 'Тестовый отзыв';
+
+DELETE FROM review WHERE description = 'Тестовый отзыв';
+
+SELECT p.product_id, p.rating AS rating_after_delete
+FROM product p
+JOIN deleted_review d ON d.entity_id = p.product_id;
 ```
 
-Ожидается: если других отзывов нет — `rating IS NULL`; иначе — пересчитан.  
+Блок выполняется после E.3: удаляется вставленный там отзыв, а блюдо запоминается до удаления, чтобы прочитать рейтинг уже после пересчёта.
+
+Ожидается: если других отзывов нет — `rating IS NULL`; иначе — пересчитан. В нашем прогоне у блюда был один отзыв, поэтому `rating_after_delete` вернулся к `rating_before`.  
 Факт: После удаления тестового отзыва рейтинг вернулся к 4.00 — пересчёт по оставшимся отзывам.  
 Вердикт: OK
 
@@ -775,7 +805,7 @@ FROM courier c;
 ```
 
 Ожидается: два SubPlan, каждый — скан `"order"`. Время растёт линейно от числа курьеров.  
-Факт: время 0.176 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл). Из 50 заказов доставленных 40, поэтому каждая из двух веток читает по 40 строк. Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=261`.  
+Факт: время около 0.15 мс. План: `Seq Scan on courier` (10 строк) → `SubPlan 1` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл) и `SubPlan 2` (`Aggregate` → `Seq Scan on "order"`, `loops=10`, по 4 строки за цикл). Из 50 заказов доставленных 40, поэтому каждая из двух веток читает по 40 строк. Таблица `"order"` просканирована 20 раз, `Buffers: shared hit=261`. Время зависит от машины, важен план.  
 Вердикт: OK
 
 ### H.2. `EXPLAIN ANALYZE` — паттерн «один JOIN»
