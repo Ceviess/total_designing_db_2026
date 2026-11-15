@@ -11,8 +11,8 @@ create or replace function get_statistic()
 returns table (
     restaurant_name varchar(50),
     best_product_name varchar(50),
-    total_amount numeric(12,2),
-    avg_amount numeric(12,2),
+    total_amount numeric(10,2),
+    avg_amount numeric(10,2),
     best_user varchar(50)
 )
 language sql
@@ -41,11 +41,12 @@ as $$
         group by o.restaurant_id, p.product_id, p.product_name
     ),
     best_products as (
-        select distinct on (restaurant_id)
-               restaurant_id,
-               product_name
+        select restaurant_id,
+               (array_agg(product_name
+                          order by sold desc, product_name))[1]
+                   as product_name
         from product_sales
-        order by restaurant_id, sold desc, random()
+        group by restaurant_id
     ),
     client_orders as (
         select o.restaurant_id,
@@ -56,16 +57,17 @@ as $$
         group by o.restaurant_id, c.login
     ),
     best_clients as (
-        select distinct on (restaurant_id)
-               restaurant_id,
-               login
+        select restaurant_id,
+               (array_agg(login
+                          order by order_count desc, login))[1]
+                   as login
         from client_orders
-        order by restaurant_id, order_count desc, random()
+        group by restaurant_id
     )
     select r.restaurant_name,
            bp.product_name,
-           coalesce(rt.total_amount, 0)::numeric(12,2),
-           coalesce(rt.avg_amount, 0)::numeric(12,2),
+           coalesce(rt.total_amount, 0)::numeric(10,2),
+           coalesce(rt.avg_amount, 0)::numeric(10,2),
            bc.login
     from kuzmin_food.restaurant r
     left join restaurant_totals rt on rt.restaurant_id = r.restaurant_id
@@ -83,9 +85,7 @@ with recursive months as (
     from kuzmin_food."order"
     where status = 'доставлен'
     having count(*) > 0
-
     union all
-
     select m.month_start + interval '1 month'
     from months m
     where m.month_start + interval '1 month' <= (
@@ -94,7 +94,6 @@ with recursive months as (
         where status = 'доставлен'
     )
 ),
-
 order_totals as (
     select date_trunc('month', order_timestamp) as month_start,
            sum(order_amount) as sum_no_commission,
@@ -111,14 +110,14 @@ pay_totals as (
 ),
 month_report as (
     select m.month_start,
-           coalesce(ot.sum_no_commission, 0)::numeric(12,2)
+           coalesce(ot.sum_no_commission, 0)::numeric(10,2)
                as sum_no_commission,
-           coalesce(ot.sum_with_commission, 0)::numeric(12,2)
+           coalesce(ot.sum_with_commission, 0)::numeric(10,2)
                as sum_with_commission,
-           coalesce(ot.sum_with_commission, 0)::numeric(12,2)
-               - coalesce(ot.sum_no_commission, 0)::numeric(12,2)
+           coalesce(ot.sum_with_commission, 0)::numeric(10,2)
+               - coalesce(ot.sum_no_commission, 0)::numeric(10,2)
                as commission,
-           coalesce(pt.courier_pay, 0)::numeric(12,2)
+           coalesce(pt.courier_pay, 0)::numeric(10,2)
                as courier_pay
     from months m
     left join order_totals ot on ot.month_start = m.month_start

@@ -11,11 +11,9 @@ create extension if not exists "uuid-ossp" with schema exts;
 do $$
 begin
     if not exists (select 1 from pg_roles where rolname = 'inspector') then
-        create role inspector login;
+        create role inspector login password 'NetoSQL2025';
     end if;
 end $$;
-
-alter role inspector login password 'NetoSQL2025';
 
 grant all privileges on schema kuzmin_food to inspector;
 
