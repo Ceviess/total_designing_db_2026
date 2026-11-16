@@ -91,72 +91,38 @@ create trigger trg_review_entity
 
 create or replace function rating_change() returns trigger
 language plpgsql as $$
+declare
+    v_old_type review_entity_type;
+    v_old_id uuid;
+    v_new_type review_entity_type;
+    v_new_id uuid;
 begin
-    if tg_op in ('UPDATE', 'DELETE') then
-        if old.entity_type = 'блюдо' then
-            update product
-            set rating = (
-                select round(avg(r.rating), 2)
-                from review r
-                where r.entity_type = 'блюдо'
-                  and r.entity_id = old.entity_id
-            )
-            where product_id = old.entity_id;
-        elsif old.entity_type = 'ресторан' then
-            update restaurant
-            set rating = (
-                select round(avg(r.rating), 2)
-                from review r
-                where r.entity_type = 'ресторан'
-                  and r.entity_id = old.entity_id
-            )
-            where restaurant_id = old.entity_id;
-        end if;
+    if tg_op <> 'INSERT' then
+        v_old_type := old.entity_type;
+        v_old_id := old.entity_id;
     end if;
-    if tg_op = 'INSERT' then
-        if new.entity_type = 'блюдо' then
-            update product
-            set rating = (
-                select round(avg(r.rating), 2)
-                from review r
-                where r.entity_type = 'блюдо'
-                  and r.entity_id = new.entity_id
-            )
-            where product_id = new.entity_id;
-        elsif new.entity_type = 'ресторан' then
-            update restaurant
-            set rating = (
-                select round(avg(r.rating), 2)
-                from review r
-                where r.entity_type = 'ресторан'
-                  and r.entity_id = new.entity_id
-            )
-            where restaurant_id = new.entity_id;
-        end if;
-    elsif tg_op = 'UPDATE' then
-        if old.entity_type is distinct from new.entity_type
-           or old.entity_id is distinct from new.entity_id then
-            if new.entity_type = 'блюдо' then
-                update product
-                set rating = (
-                    select round(avg(r.rating), 2)
-                    from review r
-                    where r.entity_type = 'блюдо'
-                      and r.entity_id = new.entity_id
-                )
-                where product_id = new.entity_id;
-            elsif new.entity_type = 'ресторан' then
-                update restaurant
-                set rating = (
-                    select round(avg(r.rating), 2)
-                    from review r
-                    where r.entity_type = 'ресторан'
-                      and r.entity_id = new.entity_id
-                )
-                where restaurant_id = new.entity_id;
-            end if;
-        end if;
+    if tg_op <> 'DELETE' then
+        v_new_type := new.entity_type;
+        v_new_id := new.entity_id;
     end if;
+    update product
+    set rating = (
+        select round(avg(r.rating), 2)
+        from review r
+        where r.entity_type = 'блюдо'
+          and r.entity_id = product.product_id
+    )
+    where (v_old_type = 'блюдо' and product_id = v_old_id)
+       or (v_new_type = 'блюдо' and product_id = v_new_id);
+    update restaurant
+    set rating = (
+        select round(avg(r.rating), 2)
+        from review r
+        where r.entity_type = 'ресторан'
+          and r.entity_id = restaurant.restaurant_id
+    )
+    where (v_old_type = 'ресторан' and restaurant_id = v_old_id)
+       or (v_new_type = 'ресторан' and restaurant_id = v_new_id);
     if tg_op = 'DELETE' then
         return old;
     end if;

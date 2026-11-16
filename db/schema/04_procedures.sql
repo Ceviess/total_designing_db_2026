@@ -3,7 +3,9 @@
 */
 
 set search_path to kuzmin_food, exts;
+
 drop procedure if exists erase_test_data();
+
 create or replace procedure erase_test_data()
 language sql
 set search_path to kuzmin_food, exts
@@ -21,19 +23,23 @@ as $$
     delete from product_category;
     delete from address;
 $$;
+
 drop procedure if exists insert_test_data(integer);
+
 create or replace procedure insert_test_data(value int)
 language plpgsql
 set search_path to kuzmin_food, exts
 as $$
 declare
+    v_alphabet text := 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
     v_client_ids uuid[];
     v_courier_ids uuid[];
+    v_active_courier_ids uuid[];
     v_category_ids uuid[];
     v_restaurant_ids uuid[];
-    v_client_address_ids uuid[];
-    v_all_product_ids uuid[];
-    v_all_prices numeric[];
+    v_address_ids uuid[];
+    v_product_ids uuid[];
+    v_prices numeric[];
     v_delivered_order_ids uuid[];
     v_delivered_client_ids uuid[];
     v_delivered_restaurant_ids uuid[];
@@ -47,15 +53,18 @@ declare
     v_order_time timestamp;
     v_delivery_time timestamp;
     v_status order_status;
+    v_pay_status order_pay_status;
     v_order_amount numeric(10,2);
     v_commission numeric(10,2);
     v_total numeric(10,2);
-    v_product_ids uuid[];
-    v_prices numeric[];
+    v_product_ids_in_order uuid[];
+    v_prices_in_order numeric[];
     v_quantities numeric[];
     v_product_count int;
     v_client_index int;
     v_restaurant_index int;
+    v_client_offset int;
+    v_address_offset int;
     v_i int;
     v_j int;
 begin
@@ -64,110 +73,105 @@ begin
             value
             using errcode = 'invalid_parameter_value';
     end if;
-    delete from review;
-    delete from payment;
-    delete from order_structure;
-    delete from courier_pay;
-    delete from "order";
-    delete from product;
-    delete from client_address;
-    delete from restaurant;
-    delete from client;
-    delete from courier;
-    delete from product_category;
-    delete from address;
+    select count(*) into v_client_offset from client;
+    select count(*) into v_address_offset from address;
+    select array_agg(exts.uuid_generate_v4() order by g)
+    into v_client_ids
+    from generate_series(1, value) as g;
     insert into client (client_id, login, password, phone_number)
-    select exts.uuid_generate_v4(),
-           'client_' || i,
+    select v_client_ids[g],
            md5(random()::text),
-           '+7900' || lpad(i::text, 7, '0')
-    from generate_series(1, value) as i;
+           md5(random()::text),
+           '+7' || lpad((v_client_offset + g)::text, 10, '0')
+    from generate_series(1, value) as g;
+    select array_agg(exts.uuid_generate_v4() order by g)
+    into v_courier_ids
+    from generate_series(1, value) as g;
     insert into courier (courier_id, last_name, first_name, middle_name,
                          phone_number, status, hire_date, dismissal_date,
                          coefficient)
-    select exts.uuid_generate_v4(),
-           'Курьер ' || i,
-           'Имя',
-           'Отчество',
-           '+7910' || lpad(i::text, 7, '0'),
-           (enum_range(null::courier_status))[
-               case when i % 5 = 0 then 4 else 1 end
-           ],
-           current_date - (30 + (i * 3) % 150),
+    select v_courier_ids[g],
+           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           '+7' || lpad(g::text, 10, '0'),
            case
-               when i % 5 = 0 then current_date - (30 + (i * 3) % 150) + 5
-               else null
+               when g % 5 = 0 then (enum_range(null::courier_status))[4]
+               else (enum_range(null::courier_status))[1 + ((g - 1) % 3)]
+           end,
+           current_date - (30 + (g * 3) % 150),
+           case
+               when g % 5 = 0
+                   then current_date - (30 + (g * 3) % 150) + 5
            end,
            0.1
-    from generate_series(1, value) as i;
-    select array_agg(courier_id order by last_name, first_name, middle_name)
-    into v_courier_ids
-    from courier;
+    from generate_series(1, value) as g;
+    select array_agg(courier_id order by courier_id)
+    into v_active_courier_ids
+    from courier
+    where courier_id = any(v_courier_ids)
+      and status <> 'уволен';
+    select array_agg(exts.uuid_generate_v4() order by g)
+    into v_category_ids
+    from generate_series(1, value) as g;
     insert into product_category (product_category_id, product_category_name)
-    select exts.uuid_generate_v4(), 'Категория ' || i
-    from generate_series(1, value) as i;
+    select v_category_ids[g],
+           substring(v_alphabet, 1, 1 + (random() * 32)::int)
+    from generate_series(1, value) as g;
+    select array_agg(exts.uuid_generate_v4() order by g)
+    into v_address_ids
+    from generate_series(1, value * 5) as g;
     insert into address (address_id, street, house_number, apartment_office)
-    select exts.uuid_generate_v4(),
-           case
-               when i <= value then 'Ресторанная улица ' || i
-               else 'Клиентская улица ' || (i - value)
-           end,
-           ((i % 50) + 1)::text,
-           case when i % 10 = 0 then null else ((i % 20) + 1)::text end
-    from generate_series(1, value * 5) as i;
+    select v_address_ids[g],
+           repeat(substring(v_alphabet, 1, 1 + (random() * 32)::int),
+                  1 + (random() * 5)::int),
+           (v_address_offset + g)::text,
+           case when g % 10 = 0 then null else ((g % 20) + 1)::text end
+    from generate_series(1, value * 5) as g;
+    select array_agg(exts.uuid_generate_v4() order by g)
+    into v_restaurant_ids
+    from generate_series(1, value) as g;
     insert into restaurant (restaurant_id, restaurant_name, address_id,
                             description, work_start, work_end,
                             inn, ogrn, bank_account, rating, status)
-    select exts.uuid_generate_v4(),
-           'Ресторан ' || a.rn,
-           a.address_id,
-           'Описание ресторана ' || a.rn,
-           time '09:00' + make_interval(hours => (a.rn % 5)::int),
-           time '21:00' + make_interval(hours => (a.rn % 3)::int),
-           '77' || lpad(a.rn::text, 8, '0'),
-           '1' || lpad(a.rn::text, 12, '0'),
-           '40817810' || lpad(a.rn::text, 12, '0'),
+    select v_restaurant_ids[g],
+           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           v_address_ids[g],
+           md5(random()::text),
+           time '09:00' + make_interval(hours => (g % 5)::int),
+           time '21:00' + make_interval(hours => (g % 3)::int),
+           '77' || lpad(g::text, 8, '0'),
+           '1' || lpad(g::text, 12, '0'),
+           '40817810' || lpad(g::text, 12, '0'),
            null,
-           (enum_range(null::restaurant_status))[1]
-    from (
-        select address_id,
-               row_number() over (order by street) as rn
-        from address
-        where street like 'Ресторанная улица %'
-    ) as a;
-    select array_agg(product_category_id order by product_category_name)
-    into v_category_ids
-    from product_category;
-    select array_agg(restaurant_id order by restaurant_name)
-    into v_restaurant_ids
-    from restaurant;
+           case
+               when g % 5 = 0 then (enum_range(null::restaurant_status))[2]
+               else (enum_range(null::restaurant_status))[1]
+           end
+    from generate_series(1, value) as g;
+    select array_agg(exts.uuid_generate_v4() order by g),
+           array_agg(
+               (100 + ((g - 1) / 5) * 10 + ((g - 1) % 5 + 1))::numeric(8,2)
+               order by g
+           )
+    into v_product_ids, v_prices
+    from generate_series(1, value * 5) as g;
     insert into product (product_id, product_name, product_category_id,
                          price, restaurant_id, photo_url, rating,
                          status, description)
-    select exts.uuid_generate_v4(),
-           'Блюдо ' || r.ord || '-' || n,
-           v_category_ids[((r.ord::int + n - 2) % value) + 1],
-           (100 + r.ord * 10 + n)::numeric(8, 2),
-           r.restaurant_id,
+    select v_product_ids[g],
+           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           v_category_ids[((g - 1) % value) + 1],
+           v_prices[g],
+           v_restaurant_ids[((g - 1) / 5) + 1],
            null,
            null,
-           (enum_range(null::product_status))[1],
-           'Описание блюда ' || r.ord || '-' || n
-    from unnest(v_restaurant_ids) with ordinality as r(restaurant_id, ord)
-    cross join generate_series(1, 5) as n;
-    select array_agg(p.product_id order by r.restaurant_name, p.product_name),
-           array_agg(p.price order by r.restaurant_name, p.product_name)
-    into v_all_product_ids, v_all_prices
-    from product p
-    join restaurant r on r.restaurant_id = p.restaurant_id;
-    select array_agg(client_id order by login) into v_client_ids
-    from client;
-    select array_agg(address_id order by street) into v_client_address_ids
-    from address
-    where street like 'Клиентская улица %';
+           (enum_range(null::product_status))[1 + ((g - 1) % 3)],
+           md5(random()::text)
+    from generate_series(1, value * 5) as g;
     insert into client_address (client_id, address_id)
     select v_client_ids[ci],
-           v_client_address_ids[(ci - 1) * 4 + aj]
+           v_address_ids[value + (ci - 1) * 4 + aj]
     from generate_series(1, value) as ci
     cross join generate_series(1, 4) as aj;
     v_delivered_order_ids := array[]::uuid[];
@@ -178,36 +182,44 @@ begin
     for v_i in 1..value * 5 loop
         v_client_index := ((v_i - 1) % value) + 1;
         v_client_id := v_client_ids[v_client_index];
-        v_address_id := v_client_address_ids[
-            (v_client_index - 1) * 4 + (1 + (v_i * 3) % 4)
+        v_address_id := v_address_ids[
+            value + (v_client_index - 1) * 4 + (1 + (v_i * 3) % 4)
         ];
         v_restaurant_index := ((v_i - 1) % value) + 1;
         v_restaurant_id := v_restaurant_ids[v_restaurant_index];
-        v_courier_id := v_courier_ids[((v_i * 3) % value) + 1];
+        v_courier_id := v_active_courier_ids[
+            ((v_i - 1) % array_length(v_active_courier_ids, 1)) + 1
+        ];
         v_order_time := localtimestamp
             - make_interval(days => (v_i * 13) % 150,
                             hours => 1 + (v_i * 7) % 23);
         if v_i % 5 = 0 then
-            v_status := case
-                when v_i % 20 = 0 then 'отменён'
-                when v_i % 10 = 0 then 'в_доставке'
-                else 'готовится'
-            end;
+            v_status := (enum_range(null::order_status))[
+                case
+                    when (v_i / 5) % 4 = 0 then 5
+                    else (v_i / 5) % 4
+                end
+            ];
         else
-            v_status := 'доставлен';
+            v_status := (enum_range(null::order_status))[4];
         end if;
         if v_status = 'доставлен' then
             v_delivery_time := v_order_time
                 + make_interval(mins => 10 + (v_i * 5) % 40);
+            v_pay_status := (enum_range(null::order_pay_status))[2];
+        elsif v_status = 'отменён' then
+            v_delivery_time := null;
+            v_pay_status := (enum_range(null::order_pay_status))[3];
         else
             v_delivery_time := null;
+            v_pay_status := (enum_range(null::order_pay_status))[1];
         end if;
         v_product_count := 1 + (v_i % 5);
-        v_product_ids := v_all_product_ids[
+        v_product_ids_in_order := v_product_ids[
             (v_restaurant_index - 1) * 5 + 1
             : (v_restaurant_index - 1) * 5 + v_product_count
         ];
-        v_prices := v_all_prices[
+        v_prices_in_order := v_prices[
             (v_restaurant_index - 1) * 5 + 1
             : (v_restaurant_index - 1) * 5 + v_product_count
         ];
@@ -215,15 +227,16 @@ begin
         v_order_amount := 0;
         for v_j in 1..v_product_count loop
             v_quantities := v_quantities || (1 + ((v_i + v_j) % 3))::numeric;
-            v_order_amount := v_order_amount + v_prices[v_j] * v_quantities[v_j];
+            v_order_amount := v_order_amount
+                + v_prices_in_order[v_j] * v_quantities[v_j];
         end loop;
         if v_order_amount < 1000 then
             v_quantities[1] := v_quantities[1]
-                + ceil((1000 - v_order_amount) / v_prices[1]);
+                + ceil((1000 - v_order_amount) / v_prices_in_order[1]);
             v_order_amount := 0;
             for v_j in 1..v_product_count loop
                 v_order_amount := v_order_amount
-                    + v_prices[v_j] * v_quantities[v_j];
+                    + v_prices_in_order[v_j] * v_quantities[v_j];
             end loop;
         end if;
         v_order_amount := round(v_order_amount, 2);
@@ -237,17 +250,25 @@ begin
         values (v_order_id, v_client_id, v_restaurant_id, v_courier_id,
                 v_address_id, v_order_time, v_delivery_time,
                 v_order_amount, v_commission, v_total,
-                v_status, 'оплачен', 'Заказ ' || v_i);
+                v_status, v_pay_status, null);
         for v_j in 1..v_product_count loop
             insert into order_structure (order_id, product_id, quantity)
-            values (v_order_id, v_product_ids[v_j], v_quantities[v_j]);
+            values (v_order_id, v_product_ids_in_order[v_j],
+                    v_quantities[v_j]);
         end loop;
         insert into payment (payment_id, order_id, payment_type, amount,
                              transaction_code, payment_timestamp, status)
         values (exts.uuid_generate_v4(), v_order_id,
                 (enum_range(null::payment_type))[1 + (v_i % 3)],
-                v_total, 'tx-' || lpad(v_i::text, 10, '0'),
-                v_order_time + make_interval(mins => 5), 'успех');
+                v_total, md5(random()::text),
+                v_order_time + make_interval(mins => 5),
+                case
+                    when v_status = 'доставлен'
+                        then (enum_range(null::payment_status))[1]
+                    when v_status = 'отменён'
+                        then (enum_range(null::payment_status))[2]
+                    else (enum_range(null::payment_status))[3]
+                end);
         if v_status = 'доставлен' then
             v_delivered_order_ids := array_append(
                 v_delivered_order_ids, v_order_id
@@ -259,7 +280,7 @@ begin
                 v_delivered_restaurant_ids, v_restaurant_id
             );
             v_delivered_product_ids := array_append(
-                v_delivered_product_ids, v_product_ids[1]
+                v_delivered_product_ids, v_product_ids_in_order[1]
             );
             v_delivered_times := array_append(
                 v_delivered_times, v_delivery_time
@@ -271,9 +292,10 @@ begin
                             entity_id, description, photo_url, rating,
                             review_timestamp)
         values (exts.uuid_generate_v4(), v_delivered_client_ids[v_j],
-                v_delivered_order_ids[v_j], 'ресторан',
+                v_delivered_order_ids[v_j],
+                (enum_range(null::review_entity_type))[2],
                 v_delivered_restaurant_ids[v_j],
-                'Отзыв о ресторане ' || v_j, null,
+                md5(random()::text), null,
                 (1 + (v_j % 5))::numeric(2,1),
                 v_delivered_times[v_j] + make_interval(mins => 10));
     end loop;
@@ -282,9 +304,15 @@ begin
                             entity_id, description, photo_url, rating,
                             review_timestamp)
         values (exts.uuid_generate_v4(), v_delivered_client_ids[v_j],
-                v_delivered_order_ids[v_j], 'блюдо',
-                v_delivered_product_ids[v_j],
-                'Отзыв о блюде ' || v_j, null,
+                v_delivered_order_ids[v_j],
+                (enum_range(null::review_entity_type))[
+                    case when v_j % 2 = 0 then 1 else 3 end
+                ],
+                case
+                    when v_j % 2 = 0 then v_delivered_product_ids[v_j]
+                    else v_delivered_order_ids[v_j]
+                end,
+                md5(random()::text), null,
                 (1 + (v_j % 5))::numeric(2,1),
                 v_delivered_times[v_j] + make_interval(mins => 10));
     end loop;
@@ -306,6 +334,7 @@ begin
           and o.status = 'доставлен'
           and o.order_timestamp >= months.month_start
           and o.order_timestamp < months.month_start + interval '1 month'
+    where c.courier_id = any(v_courier_ids)
     group by months.month_start, c.courier_id, c.coefficient;
 end $$;
 drop procedure if exists add_product(uuid, uuid, varchar, numeric,
@@ -320,123 +349,60 @@ create or replace procedure add_product(
     p_rating numeric default null,
     p_photo_url text default null
 )
-language plpgsql
+language sql
 set search_path to kuzmin_food, exts
 as $$
-declare
-    v_constraint text;
-    v_column text;
-begin
-    insert into product (product_id, product_name, product_category_id,
-                         price, restaurant_id, photo_url, rating,
-                         status, description)
-    values (exts.uuid_generate_v4(), p_name, p_product_category_id,
-            p_price, p_restaurant_id, p_photo_url, p_rating,
-            p_status, p_description);
-exception
-    when foreign_key_violation then
-        get stacked diagnostics v_constraint = constraint_name;
-
-        if v_constraint = 'fk_product_restaurant' then
-            raise exception 'add_product: ресторан % не найден',
-                p_restaurant_id
-                using errcode = 'foreign_key_violation';
-        elsif v_constraint = 'fk_product_category' then
-            raise exception 'add_product: категория % не найдена',
-                p_product_category_id
-                using errcode = 'foreign_key_violation';
-        end if;
-        raise;
-    when check_violation then
-        get stacked diagnostics v_constraint = constraint_name;
-
-        if v_constraint = 'check_product_price' then
-            raise exception 'add_product: цена блюда не может быть отрицательной: %',
-                p_price
-                using errcode = 'check_violation';
-        elsif v_constraint = 'check_product_rating' then
-            raise exception 'add_product: рейтинг блюда должен быть от 0 до 5: %',
-                p_rating
-                using errcode = 'check_violation';
-        end if;
-        raise;
-    when not_null_violation then
-        get stacked diagnostics v_column = column_name;
-
-        raise exception 'add_product: поле % обязательно', v_column
-            using errcode = 'not_null_violation';
-    when numeric_value_out_of_range then
-        raise exception 'add_product: числовое значение не помещается в тип столбца'
-            using errcode = 'numeric_value_out_of_range';
-end $$;
+    insert into product (product_name, product_category_id, price,
+                         restaurant_id, photo_url, rating, status,
+                         description)
+    values (p_name, p_product_category_id, p_price, p_restaurant_id,
+            p_photo_url, p_rating, p_status, p_description);
+$$;
 drop procedure if exists courier_salary();
 create or replace procedure courier_salary()
 language sql
 set search_path to kuzmin_food, exts
 as $$
-    with bounds as (
-        select date_trunc('month', localtimestamp) as month_start,
-               date_trunc('month', localtimestamp) + interval '1 month'
-                   as next_month
-    ),
-    delivered as (
+    with stats as (
         select o.courier_id,
+               count(*) as order_count,
                sum(o.commission) as commission
         from "order" o
-        cross join bounds b
         where o.status = 'доставлен'
-          and o.order_timestamp >= b.month_start
-          and o.order_timestamp < b.next_month
+          and o.order_timestamp >= date_trunc('month', localtimestamp)
+          and o.order_timestamp < date_trunc('month', localtimestamp)
+                                    + interval '1 month'
         group by o.courier_id
-    ),
-    calculation as (
-        select extract(year from b.month_start)::smallint as pay_year,
-               extract(month from b.month_start)::smallint as pay_month,
-               c.courier_id,
-               coalesce(d.commission, 0) as commission,
-               coalesce(cp.coefficient_used, c.coefficient)
-                   as coefficient_used
-        from courier c
-        cross join bounds b
-        left join delivered d on d.courier_id = c.courier_id
-        left join courier_pay cp
-               on cp.courier_id = c.courier_id
-              and cp.year = extract(year from b.month_start)::smallint
-              and cp.month = extract(month from b.month_start)::smallint
     ),
     payout as (
         insert into courier_pay (year, month, courier_id, amount,
                                  coefficient_used)
-        select pay_year,
-               pay_month,
-               courier_id,
-               round(commission * coefficient_used, 2),
-               coefficient_used
-        from calculation
+        select extract(year from localtimestamp)::smallint,
+               extract(month from localtimestamp)::smallint,
+               c.courier_id,
+               round(coalesce(s.commission, 0)
+                     * coalesce(cp.coefficient_used, c.coefficient), 2),
+               coalesce(cp.coefficient_used, c.coefficient)
+        from courier c
+        left join stats s on s.courier_id = c.courier_id
+        left join courier_pay cp
+               on cp.courier_id = c.courier_id
+              and cp.year = extract(year from localtimestamp)::smallint
+              and cp.month = extract(month from localtimestamp)::smallint
         on conflict (year, month, courier_id) do update
         set amount = excluded.amount,
             coefficient_used = excluded.coefficient_used
-        returning 1
     )
     update courier c
-    set coefficient = case
-            when s.order_count <= 150 then 0.1
-            when s.order_count <= 250 then 0.2
-            when s.order_count <= 500 then 0.3
-            else 0.5
-        end
-    from (
-        select c2.courier_id,
-               count(o.order_id) as order_count
-        from courier c2
-        cross join bounds b
-        left join "order" o
-               on o.courier_id = c2.courier_id
-              and o.status = 'доставлен'
-              and o.order_timestamp >= b.month_start
-              and o.order_timestamp < b.next_month
-        group by c2.courier_id
-    ) s
-    where c.courier_id = s.courier_id
-      and c.status <> 'уволен';
+    set coefficient = coalesce((
+            select case
+                    when s.order_count <= 150 then 0.1
+                    when s.order_count <= 250 then 0.2
+                    when s.order_count <= 500 then 0.3
+                    else 0.5
+                end
+            from stats s
+            where s.courier_id = c.courier_id
+        ), 0.1)
+    where c.status <> 'уволен';
 $$;
