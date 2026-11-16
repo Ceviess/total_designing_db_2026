@@ -116,7 +116,7 @@ begin
     from generate_series(1, value) as g;
     insert into product_category (product_category_id, product_category_name)
     select v_category_ids[g],
-           substring(v_alphabet, 1, 1 + (random() * 32)::int)
+           md5(random()::text)
     from generate_series(1, value) as g;
     select array_agg(exts.uuid_generate_v4() order by g)
     into v_address_ids
@@ -135,7 +135,7 @@ begin
                             description, work_start, work_end,
                             inn, ogrn, bank_account, rating, status)
     select v_restaurant_ids[g],
-           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           md5(random()::text),
            v_address_ids[g],
            md5(random()::text),
            time '09:00' + make_interval(hours => (g % 5)::int),
@@ -160,7 +160,7 @@ begin
                          price, restaurant_id, photo_url, rating,
                          status, description)
     select v_product_ids[g],
-           substring(v_alphabet, 1, 1 + (random() * 32)::int),
+           md5(random()::text),
            v_category_ids[((g - 1) % value) + 1],
            v_prices[g],
            v_restaurant_ids[((g - 1) / 5) + 1],
